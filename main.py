@@ -36,25 +36,33 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
+
 def get_all_games():
-    rows = games_sheet.get_all_values()[1:]
-    return rows
+    return games_sheet.get_all_values()[1:]
+
 
 def get_game_by_message_id(message_id):
     rows = games_sheet.get_all_values()[1:]
+
     for row in rows:
         while len(row) < 5:
             row.append("")
+
         game, release, console, posted, msg_id = row[:5]
+
         if str(msg_id) == str(message_id):
             return game
+
     return None
+
 
 def upsert_rating(user_id, username, game, rating):
     rows = ratings_sheet.get_all_values()
+
     for i, row in enumerate(rows[1:], start=2):
         while len(row) < 5:
             row.append("")
+
         if row[1] == str(user_id) and row[3] == game:
             ratings_sheet.update(f"A{i}:E{i}", [[
                 datetime.datetime.now().isoformat(),
@@ -73,14 +81,18 @@ def upsert_rating(user_id, username, game, rating):
         rating
     ])
 
-def remove_rating(user_id, game):
+
+def remove_rating(user_id, game, rating_removed):
     rows = ratings_sheet.get_all_values()
+
     for i, row in enumerate(rows[1:], start=2):
         while len(row) < 5:
             row.append("")
-        if row[1] == str(user_id) and row[3] == game:
+
+        if row[1] == str(user_id) and row[3] == game and str(row[4]) == str(rating_removed):
             ratings_sheet.delete_rows(i)
             return
+
 
 async def sync_games():
     await client.wait_until_ready()
@@ -121,18 +133,30 @@ async def sync_games():
 
         await asyncio.sleep(60)
 
+
 @client.event
 async def on_raw_reaction_add(payload):
     if payload.user_id == client.user.id:
         return
 
     emoji = str(payload.emoji)
+
     if emoji not in RATING_EMOJIS:
         return
 
     game = get_game_by_message_id(payload.message_id)
+
     if not game:
         return
+
+    channel = client.get_channel(payload.channel_id)
+    message = await channel.fetch_message(payload.message_id)
+
+    for reaction in message.reactions:
+        if str(reaction.emoji) in RATING_EMOJIS and str(reaction.emoji) != emoji:
+            async for user in reaction.users():
+                if user.id == payload.user_id:
+                    await reaction.remove(user)
 
     guild = client.get_guild(payload.guild_id)
     member = guild.get_member(payload.user_id) if guild else None
@@ -140,17 +164,21 @@ async def on_raw_reaction_add(payload):
 
     upsert_rating(payload.user_id, username, game, RATING_EMOJIS[emoji])
 
+
 @client.event
 async def on_raw_reaction_remove(payload):
     emoji = str(payload.emoji)
+
     if emoji not in RATING_EMOJIS:
         return
 
     game = get_game_by_message_id(payload.message_id)
+
     if not game:
         return
 
-    remove_rating(payload.user_id, game)
+    remove_rating(payload.user_id, game, RATING_EMOJIS[emoji])
+
 
 @tree.command(name="rankings", description="Show current game rankings")
 async def rankings(interaction: discord.Interaction):
@@ -160,6 +188,10 @@ async def rankings(interaction: discord.Interaction):
     for row in rows:
         while len(row) < 5:
             row.append("")
+
+        if not row[3] or not row[4]:
+            continue
+
         game = row[3]
         rating = int(row[4])
         data.setdefault(game, []).append(rating)
@@ -169,6 +201,7 @@ async def rankings(interaction: discord.Interaction):
         return
 
     results = []
+
     for game, ratings in data.items():
         avg = sum(ratings) / len(ratings)
         results.append((game, avg, len(ratings)))
@@ -176,10 +209,12 @@ async def rankings(interaction: discord.Interaction):
     results.sort(key=lambda x: x[1], reverse=True)
 
     msg = "🏆 **Current Game Rankings**\n\n"
+
     for i, (game, avg, count) in enumerate(results, 1):
         msg += f"{i}. **{game}** — {avg:.1f} ⭐ ({count} votes)\n"
 
     await interaction.response.send_message(msg)
+
 
 @tree.command(name="monthly_rankings", description="Show this month's top games")
 async def monthly_rankings(interaction: discord.Interaction):
@@ -190,7 +225,12 @@ async def monthly_rankings(interaction: discord.Interaction):
     for row in rows:
         while len(row) < 5:
             row.append("")
+
         timestamp, user_id, username, game, rating = row[:5]
+
+        if not timestamp or not game or not rating:
+            continue
+
         dt = datetime.datetime.fromisoformat(timestamp)
 
         if dt.month == now.month and dt.year == now.year:
@@ -201,6 +241,7 @@ async def monthly_rankings(interaction: discord.Interaction):
         return
 
     results = []
+
     for game, ratings in data.items():
         avg = sum(ratings) / len(ratings)
         results.append((game, avg, len(ratings)))
@@ -208,10 +249,12 @@ async def monthly_rankings(interaction: discord.Interaction):
     results.sort(key=lambda x: x[1], reverse=True)
 
     msg = "📅 **Top Games This Month**\n\n"
+
     for i, (game, avg, count) in enumerate(results, 1):
         msg += f"{i}. **{game}** — {avg:.1f} ⭐ ({count} votes)\n"
 
     await interaction.response.send_message(msg)
+
 
 @tree.command(name="backlog", description="Show games you haven't reviewed yet")
 async def backlog(interaction: discord.Interaction):
@@ -221,9 +264,11 @@ async def backlog(interaction: discord.Interaction):
     rows = ratings_sheet.get_all_values()[1:]
 
     reviewed = set()
+
     for row in rows:
         while len(row) < 5:
             row.append("")
+
         if row[1] == user_id:
             reviewed.add(row[3])
 
@@ -234,10 +279,56 @@ async def backlog(interaction: discord.Interaction):
         return
 
     msg = "🎮 **Games You Haven’t Reviewed Yet**\n\n"
+
     for game in missing:
         msg += f"• {game}\n"
 
     await interaction.response.send_message(msg, ephemeral=True)
+
+
+@tree.command(name="missing_reviews", description="Show who still needs to review each game")
+async def missing_reviews(interaction: discord.Interaction):
+    games = [row[0] for row in get_all_games() if row and row[0]]
+    rows = ratings_sheet.get_all_values()[1:]
+
+    guild = interaction.guild
+    members = [m for m in guild.members if not m.bot]
+
+    if not games:
+        await interaction.response.send_message("No games have been added yet.")
+        return
+
+    msg = "📝 **Missing Reviews**\n\n"
+
+    for game in games:
+        reviewed_user_ids = set()
+
+        for row in rows:
+            while len(row) < 5:
+                row.append("")
+
+            user_id = row[1]
+            reviewed_game = row[3]
+
+            if reviewed_game == game:
+                reviewed_user_ids.add(user_id)
+
+        missing = [m.display_name for m in members if str(m.id) not in reviewed_user_ids]
+
+        msg += f"🎮 **{game}**\n"
+
+        if missing:
+            msg += "Still missing:\n"
+
+            for member in missing:
+                msg += f"• {member}\n"
+        else:
+            msg += "✅ Everyone has reviewed this one!\n"
+
+        msg += "\n"
+
+    await interaction.response.send_message(msg)
+
 
 @client.event
 async def on_ready():
@@ -245,6 +336,10 @@ async def on_ready():
     tree.copy_global_to(guild=guild)
     await tree.sync(guild=guild)
     print(f"Logged in as {client.user}")
-    client.loop.create_task(sync_games())
+
+    if not hasattr(client, "sync_task_started"):
+        client.sync_task_started = True
+        client.loop.create_task(sync_games())
+
 
 client.run(DISCORD_TOKEN)
