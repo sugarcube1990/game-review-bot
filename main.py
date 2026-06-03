@@ -9,6 +9,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 
 SHEET_ID = "17QEa2Tgo-5Sy1kxgrgUfzVasuaT_OCWy0a4xC2GFRKA"
 CHANNEL_ID = 1511558337760854117
+GUILD_ID = 1511529095421366302
 
 RATING_EMOJIS = {
     "1️⃣": 1,
@@ -240,7 +241,9 @@ async def backlog(interaction: discord.Interaction):
 
 @client.event
 async def on_ready():
-    await tree.sync()
+    guild = discord.Object(id=GUILD_ID)
+    tree.copy_global_to(guild=guild)
+    await tree.sync(guild=guild)
     print(f"Logged in as {client.user}")
     client.loop.create_task(sync_games())
 
